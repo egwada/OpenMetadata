@@ -132,10 +132,10 @@ class TestJobsTable:
         return engine
 
     def test_dremio_cloud_table(self):
-        assert get_jobs_table(self.engine_failing_on("sys.jobs")) == "sys.project.jobs"
+        assert get_jobs_table(self.engine_failing_on("sys.jobs_recent")) == "sys.project.jobs_recent"
 
     def test_dremio_software_table(self):
-        assert get_jobs_table(self.engine_failing_on("sys.project.jobs")) == "sys.jobs"
+        assert get_jobs_table(self.engine_failing_on("sys.project.jobs_recent")) == "sys.jobs_recent"
 
     def test_raises_when_no_table_is_readable(self):
         with pytest.raises(RuntimeError, match="None of the Dremio job history tables"):
