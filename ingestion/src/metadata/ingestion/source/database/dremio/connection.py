@@ -45,6 +45,7 @@ from metadata.ingestion.connections.test_connections import (
 )
 from metadata.ingestion.ometa.ometa_api import OpenMetadata
 from metadata.ingestion.source.connections_utils import kill_active_connections
+from metadata.ingestion.source.database.dremio import dialect  # noqa: F401  registers dremio+flight
 from metadata.ingestion.source.database.dremio.queries import (
     DREMIO_GET_DATABASES,
     DREMIO_JOBS_TABLES,
