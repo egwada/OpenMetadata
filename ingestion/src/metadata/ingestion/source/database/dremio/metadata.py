@@ -28,27 +28,10 @@ from metadata.ingestion.source.database.dremio.queries import (
 from metadata.utils import fqn
 from metadata.utils.filters import filter_by_database
 from metadata.utils.logger import ingestion_logger
-from sqlalchemy import types
 from sqlalchemy.engine import Inspector
-from sqlalchemy.sql.sqltypes import STRINGTYPE
 
-from sqlalchemy_dremio import flight
 
 logger = ingestion_logger()
-
-# SqlAlchemy < 2.0 doesn't have a DOUBLE type, but using Float here would be misleading and can be dangerous for the openmetadata users
-class DOUBLE(types.Float):
-    __visit_name__ = "DOUBLE"
-
-
-# monkey patching the sql types of sqlalchemy_dremio package
-flight._type_map.update({
-    'double': DOUBLE,
-    'DOUBLE': DOUBLE,
-    'CHARACTER VARYING': STRINGTYPE,
-    'BINARY VARYING': types.LargeBinary,
-})
-
 
 class DremioSource(CommonDbSourceService, MultiDBSource):
     """
