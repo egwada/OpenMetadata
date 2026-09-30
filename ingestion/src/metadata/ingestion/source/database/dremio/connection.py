@@ -13,10 +13,16 @@
 Source connection handler
 """
 
+from functools import partial
+from typing import Optional
 from urllib.parse import urlparse
 
+from sqlalchemy import text
 from sqlalchemy.engine import URL, Engine
 
+from metadata.generated.schema.entity.automations.workflow import (
+    Workflow as AutomationWorkflow,
+)
 from metadata.generated.schema.entity.services.connections.database.dremio.cloudAuth import (
     DremioCloudAuthentication,
     Region,
@@ -27,8 +33,29 @@ from metadata.generated.schema.entity.services.connections.database.dremio.softw
 from metadata.generated.schema.entity.services.connections.database.dremioConnection import (
     DremioConnection as DremioConnectionConfig,
 )
+from metadata.generated.schema.entity.services.connections.testConnectionResult import (
+    TestConnectionResult,
+)
 from metadata.ingestion.connections.builders import create_generic_db_connection
 from metadata.ingestion.connections.connection import BaseConnection
+from metadata.ingestion.connections.test_connections import (
+    test_connection_engine_step,
+    test_connection_steps,
+    test_query,
+)
+from metadata.ingestion.ometa.ometa_api import OpenMetadata
+from metadata.ingestion.source.connections_utils import kill_active_connections
+from metadata.ingestion.source.database.dremio.queries import (
+    DREMIO_GET_DATABASES,
+    DREMIO_JOBS_TABLES,
+    DREMIO_TEST_GET_JOBS,
+    DREMIO_TEST_GET_SCHEMAS,
+    DREMIO_TEST_GET_TABLES,
+)
+from metadata.utils.constants import THREE_MIN
+from metadata.utils.logger import ingestion_logger
+
+logger = ingestion_logger()
 
 DREMIO_DIALECT = "dremio+flight"
 
@@ -58,6 +85,62 @@ class DremioConnection(BaseConnection[DremioConnectionConfig, Engine]):
         )
         self._on_close(engine.dispose)
         return engine
+
+    def test_connection(
+        self,
+        metadata: OpenMetadata,
+        automation_workflow: Optional[AutomationWorkflow] = None,
+        timeout_seconds: Optional[int] = THREE_MIN,
+    ) -> TestConnectionResult:
+        """
+        Test connection. This can be executed either as part
+        of a metadata workflow or during an Automation Workflow
+        """
+        engine = self.client
+
+        # The steps come from the `dremio` test connection definition of the
+        # server: every step it lists needs a function here.
+        test_fn = {
+            "CheckAccess": partial(test_connection_engine_step, engine),
+            "GetDatabases": partial(test_query, engine=engine, statement=DREMIO_GET_DATABASES),
+            "GetSchemas": partial(test_query, engine=engine, statement=DREMIO_TEST_GET_SCHEMAS),
+            "GetTables": partial(test_query, engine=engine, statement=DREMIO_TEST_GET_TABLES),
+            "GetQueries": partial(get_jobs_table, engine),
+        }
+
+        result = test_connection_steps(
+            metadata=metadata,
+            test_fn=test_fn,
+            service_type=self.service_connection.type.value,
+            automation_workflow=automation_workflow,
+            timeout_seconds=timeout_seconds,
+        )
+
+        kill_active_connections(engine)
+
+        return result
+
+
+def get_jobs_table(engine: Engine) -> str:
+    """
+    Return the system table that holds the job history of this Dremio.
+
+    The table depends on the edition (see DREMIO_JOBS_TABLES), so each candidate
+    is probed in turn. Raises if none can be read, which is the case when the
+    edition has no such table or when the user is not allowed to read it.
+    """
+    with engine.connect() as connection:
+        for jobs_table in DREMIO_JOBS_TABLES:
+            try:
+                connection.execute(text(DREMIO_TEST_GET_JOBS.format(jobs_table=jobs_table))).fetchone()
+                return jobs_table
+            except Exception as exc:  # noqa: BLE001
+                # sqlalchemy-dremio lets the raw pyarrow error through (e.g.
+                # ArrowInvalid: Object 'project' not found within 'sys'), so any
+                # failure means this candidate is not usable.
+                logger.debug(f"Dremio job history is not readable from [{jobs_table}]: {exc}")
+
+    raise RuntimeError(f"None of the Dremio job history tables can be read: {', '.join(DREMIO_JOBS_TABLES)}")
 
 
 def get_connection_url(connection: DremioConnectionConfig) -> URL:
