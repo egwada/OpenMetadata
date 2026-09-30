@@ -24,6 +24,7 @@ from typing import Iterator  # noqa: UP035
 from unittest.mock import Mock, patch
 
 from metadata.generated.schema.api.data.createQuery import CreateQueryRequest
+from metadata.generated.schema.type.filterPattern import FilterPattern
 from metadata.generated.schema.type.tableQuery import TableQuery
 from metadata.ingestion.api.models import Either
 from metadata.ingestion.lineage.models import Dialect
@@ -411,6 +412,44 @@ class TestViewLineage(unittest.TestCase):
             self.assertEqual(views[0].table_name, "view1")
             # Verify the filtered view was logged
             self.lineage_source.status.filter.assert_called_once()
+
+
+    def test_view_lineage_producer_filters_on_names_without_quotes(self):
+        """A name that holds a dot keeps its quotes in the FQN, not in the filters"""
+        views = [
+            TableView(
+                table_name="view1",
+                db_name="db1",
+                schema_name='"folder.sub"',
+                view_def="CREATE VIEW view1 AS SELECT * FROM table1",
+            ),
+            TableView(
+                table_name="view2",
+                db_name="db1",
+                schema_name="other",
+                view_def="CREATE VIEW view2 AS SELECT * FROM table2",
+            ),
+        ]
+        self.mock_metadata.yield_es_view_def = Mock(return_value=iter(views))
+        self.lineage_source.source_config.schemaFilterPattern = FilterPattern(includes=[r"^folder\.sub$"])
+
+        produced = list(self.lineage_source.view_lineage_producer())
+
+        self.assertEqual([view.table_name for view in produced], ["view1"])
+
+    def test_view_lineage_producer_excludes_on_names_without_quotes(self):
+        views = [
+            TableView(
+                table_name="view1",
+                db_name="db1",
+                schema_name='"folder.sub"',
+                view_def="CREATE VIEW view1 AS SELECT * FROM table1",
+            ),
+        ]
+        self.mock_metadata.yield_es_view_def = Mock(return_value=iter(views))
+        self.lineage_source.source_config.schemaFilterPattern = FilterPattern(excludes=[r"^folder\.sub$"])
+
+        self.assertEqual(list(self.lineage_source.view_lineage_producer()), [])
 
 
 class TestProcessingMethods(unittest.TestCase):
