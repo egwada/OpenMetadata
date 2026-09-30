@@ -14,6 +14,8 @@ Dremio base for the Usage and Lineage workflows
 """
 
 from abc import ABC
+from datetime import datetime
+from functools import cached_property
 from typing import Optional
 
 from metadata.generated.schema.entity.services.connections.database.dremioConnection import (
@@ -24,7 +26,11 @@ from metadata.generated.schema.metadataIngestion.workflow import (
 )
 from metadata.ingestion.api.steps import InvalidSourceException
 from metadata.ingestion.ometa.ometa_api import OpenMetadata
+from metadata.ingestion.source.database.dremio.connection import get_jobs_table
+from metadata.ingestion.source.database.dremio.queries import DREMIO_INTERNAL_QUERY_TYPES
 from metadata.ingestion.source.database.query_parser_source import QueryParserSource
+
+TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class DremioQueryParserSource(QueryParserSource, ABC):
@@ -40,3 +46,21 @@ class DremioQueryParserSource(QueryParserSource, ABC):
         if not isinstance(connection, DremioConnectionConfig):
             raise InvalidSourceException(f"Expected DremioConnection, but got {connection}")
         return cls(config, metadata)
+
+    @cached_property
+    def jobs_table(self) -> str:
+        """The system table that holds the job history of this edition of Dremio"""
+        return get_jobs_table(self.engine)
+
+    def get_sql_statement(self, start_time: datetime, end_time: datetime) -> str:
+        """
+        Returns the statement that reads the job history between the two dates
+        """
+        return self.sql_stmt.format(
+            jobs_table=self.jobs_table,
+            excluded_query_types=", ".join(f"'{query_type}'" for query_type in DREMIO_INTERNAL_QUERY_TYPES),
+            start_time=start_time.strftime(TIMESTAMP_FORMAT),
+            end_time=end_time.strftime(TIMESTAMP_FORMAT),
+            filters=self.get_filters(),
+            result_limit=self.source_config.resultLimit,
+        )

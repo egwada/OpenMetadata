@@ -71,8 +71,45 @@ WHERE TABLE_TYPE IN ('TABLE', 'VIEW')
 )
 
 # The job history lives in a different system table depending on the edition:
-# `sys.project.jobs` on Dremio Cloud, `sys.jobs` on Dremio Software. It is
-# resolved at run time by probing these candidates in order.
-DREMIO_JOBS_TABLES = ("sys.project.jobs", "sys.jobs")
+# `sys.project.jobs_recent` on Dremio Cloud, `sys.jobs_recent` on Dremio
+# Software. It is resolved at run time by probing these candidates in order.
+# `jobs` next to them only lists the jobs that are running.
+DREMIO_JOBS_TABLES = ("sys.project.jobs_recent", "sys.jobs_recent")
 
 DREMIO_TEST_GET_JOBS = "SELECT job_id FROM {jobs_table} LIMIT 1"
+
+# Jobs Dremio runs for itself: previews of the interface, refreshes of the
+# metadata and of the reflections, drops. They say nothing about the usage of
+# a table.
+DREMIO_INTERNAL_QUERY_TYPES = (
+    "UI_INTERNAL_RUN",
+    "UI_INTERNAL_PREVIEW",
+    "UI_INITIAL_PREVIEW",
+    "METADATA_REFRESH",
+    "INTERNAL_ICEBERG_METADATA_DROP",
+    "ACCELERATOR_CREATE",
+    "ACCELERATOR_DROP",
+    "ACCELERATOR_EXPLAIN",
+    "PREPARE_INTERNAL",
+)
+
+# Query log of the usage workflow. `duration` is in seconds.
+DREMIO_SQL_STATEMENT = textwrap.dedent(
+    """
+SELECT
+  "query" AS query_text,
+  user_name,
+  query_type,
+  submitted_ts AS start_time,
+  final_state_ts AS end_time,
+  CAST(final_state_epoch_millis - submitted_epoch_millis AS DOUBLE) / 1000 AS duration
+FROM {jobs_table}
+WHERE status = 'COMPLETED'
+  AND query_type NOT IN ({excluded_query_types})
+  AND submitted_ts >= TIMESTAMP '{start_time}'
+  AND submitted_ts < TIMESTAMP '{end_time}'
+  {filters}
+ORDER BY submitted_ts
+LIMIT {result_limit}
+    """
+)
