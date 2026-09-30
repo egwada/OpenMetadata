@@ -19,6 +19,7 @@ from metadata.ingestion.api.steps import InvalidSourceException
 from metadata.ingestion.ometa.ometa_api import OpenMetadata
 from metadata.ingestion.source.database.common_db_source import CommonDbSourceService, TableNameAndType
 from metadata.ingestion.source.database.multi_db_source import MultiDBSource
+from metadata.ingestion.source.database.dremio.dialect import quote_path
 from metadata.ingestion.source.database.dremio.queries import (
     DREMIO_GET_DATABASES,
     DREMIO_GET_SCHEMAS,
@@ -165,8 +166,17 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
             schema_name: str,
             inspector: Inspector,
     ) -> Optional[str]:
-        return super().get_schema_definition(
+        """
+        The SQL of a view is stored as a `CREATE VIEW` statement, as the other
+        connectors do. Without a target, the lineage parser links the view to
+        its source tables but derives no column lineage.
+        """
+        view_definition = super().get_schema_definition(
             table_type, table_name, self._add_database_to_schema_name(schema_name), inspector)
+
+        if view_definition and table_type == TableType.View:
+            return f"CREATE VIEW {quote_path(None, table_name)} AS {view_definition}"
+        return view_definition
 
     def query_table_names_and_types(
             self, schema_name: str
