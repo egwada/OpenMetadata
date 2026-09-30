@@ -13,6 +13,7 @@
 Unit tests for the Dremio lineage
 """
 
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,6 +23,7 @@ from metadata.ingestion.api.steps import InvalidSourceException
 from metadata.ingestion.lineage.models import Dialect
 from metadata.ingestion.lineage.parser import LineageParser
 from metadata.ingestion.source.database.dremio.lineage import DremioLineageSource
+from metadata.ingestion.source.database.dremio.queries import DREMIO_SQL_STATEMENT
 from metadata.ingestion.source.database.dremio.metadata import DremioSource
 from metadata.ingestion.source.database.dremio.service_spec import ServiceSpec
 from metadata.ingestion.source.database.lineage_source import LineageSource
@@ -115,10 +117,26 @@ class TestLineageSource:
     def test_spec_registers_the_lineage_source(self):
         assert ServiceSpec.lineage_source_class.endswith("dremio.lineage.DremioLineageSource")
 
-    def test_query_lineage_is_not_supported_yet(self):
-        source = DremioLineageSource.__new__(DremioLineageSource)
+    def test_query_lineage_reads_the_job_history(self):
+        assert DremioLineageSource.sql_stmt is DREMIO_SQL_STATEMENT
 
-        assert list(source.yield_table_query()) == []
+    def test_query_lineage_is_not_overridden(self):
+        assert "yield_table_query" not in DremioLineageSource.__dict__
+
+    @pytest.mark.parametrize("pattern", ["create%%table%%as", "insert%%into", "merge%%into"])
+    def test_only_statements_that_write_are_selected(self, pattern):
+        assert f"LIKE '%%{pattern}%%'" in DremioLineageSource.filters
+
+    def test_filter_is_added_to_the_statement(self):
+        source = DremioLineageSource.__new__(DremioLineageSource)
+        source.engine = MagicMock()
+        source.__dict__["jobs_table"] = "sys.jobs_recent"
+        source.source_config = MagicMock(resultLimit=10, filterCondition=None)
+
+        statement = source.get_sql_statement(datetime(2026, 9, 29), datetime(2026, 9, 30))
+
+        assert "FROM sys.jobs_recent" in statement
+        assert "create%%table%%as" in statement
 
     def test_create_rejects_another_connection(self):
         with patch("metadata.ingestion.source.database.dremio.query_parser.WorkflowSource") as workflow_source:
