@@ -1,0 +1,175 @@
+#  Copyright 2026 Collate
+#  Licensed under the Collate Community License, Version 1.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#  https://github.com/open-metadata/OpenMetadata/blob/main/ingestion/LICENSE
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+"""
+Unit tests for the Dremio connection
+"""
+
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+from pyarrow.lib import ArrowInvalid
+from sqlalchemy.engine import make_url
+
+from metadata.generated.schema.entity.services.connections.database.dremioConnection import (
+    DremioConnection as DremioConnectionConfig,
+)
+from metadata.ingestion.source.database.database_service import DatabaseServiceSource
+from metadata.ingestion.source.database.dremio.connection import (
+    DremioConnection,
+    get_connection_url,
+    get_jobs_table,
+)
+from metadata.ingestion.source.database.dremio.metadata import DremioSource
+from metadata.ingestion.source.database.dremio.queries import DREMIO_JOBS_TABLES
+from metadata.ingestion.source.database.dremio.service_spec import ServiceSpec
+
+TEST_CONNECTION_DEFINITION = (
+    Path(__file__).parents[6]
+    / "openmetadata-service/src/main/resources/json/data/testConnections/database/dremio.json"
+)
+
+
+def software_config(host_port: str = "http://dremio:9047", password: str = "secret") -> DremioConnectionConfig:
+    return DremioConnectionConfig.model_validate(
+        {"authType": {"hostPort": host_port, "username": "svc", "password": password}}
+    )
+
+
+def cloud_config(region: str) -> DremioConnectionConfig:
+    return DremioConnectionConfig.model_validate(
+        {"authType": {"region": region, "personalAccessToken": "pat-value", "projectId": "project"}}
+    )
+
+
+class TestSoftwareConnectionUrl:
+    def test_uses_the_flight_port_of_the_rest_host(self):
+        url = get_connection_url(software_config("http://dremio.internal:9047"))
+
+        assert url.drivername == "dremio+flight"
+        assert url.host == "dremio.internal"
+        assert url.port == 32010
+        assert url.username == "svc"
+        assert url.password == "secret"
+
+    def test_plain_http_disables_encryption(self):
+        url = get_connection_url(software_config("http://dremio:9047"))
+
+        assert url.query["UseEncryption"] == "False"
+
+    def test_https_enables_encryption(self):
+        url = get_connection_url(software_config("https://dremio:9047"))
+
+        assert url.query["UseEncryption"] == "True"
+
+    def test_special_characters_in_password_are_escaped(self):
+        password = "p@ss/w:rd?#&="
+        url = get_connection_url(software_config(password=password))
+
+        rendered = url.render_as_string(hide_password=False)
+
+        assert password not in rendered
+        # Parsed back from the rendered string, the credentials and host survive
+        parsed = make_url(rendered)
+        assert parsed.password == password
+        assert parsed.host == "dremio"
+
+    def test_no_token_is_sent(self):
+        assert "Token" not in get_connection_url(software_config()).query
+
+
+class TestCloudConnectionUrl:
+    @pytest.mark.parametrize(
+        "region,host",
+        [("US", "data.dremio.cloud"), ("EU", "data.eu.dremio.cloud")],
+    )
+    def test_regional_endpoint_over_tls(self, region, host):
+        url = get_connection_url(cloud_config(region))
+
+        assert url.host == host
+        assert url.port == 443
+        assert url.query["UseEncryption"] == "True"
+
+    def test_token_is_sent_without_username_or_password(self):
+        url = get_connection_url(cloud_config("EU"))
+
+        assert url.query["Token"] == "pat-value"
+        assert url.username is None
+        assert url.password is None
+
+
+def test_unsupported_authentication_is_rejected():
+    connection = MagicMock()
+    connection.authType = object()
+
+    with pytest.raises(ValueError, match="Unsupported Dremio authentication"):
+        get_connection_url(connection)
+
+
+class TestJobsTable:
+    @staticmethod
+    def engine_failing_on(*unreadable_tables: str) -> MagicMock:
+        engine = MagicMock()
+        connection = engine.connect.return_value.__enter__.return_value
+
+        def execute(statement):
+            if any(table in str(statement) for table in unreadable_tables):
+                # The driver lets the raw pyarrow error through, not a SQLAlchemy one
+                raise ArrowInvalid("Object 'project' not found within 'sys'")
+            return MagicMock()
+
+        connection.execute.side_effect = execute
+        return engine
+
+    def test_dremio_cloud_table(self):
+        assert get_jobs_table(self.engine_failing_on("sys.jobs")) == "sys.project.jobs"
+
+    def test_dremio_software_table(self):
+        assert get_jobs_table(self.engine_failing_on("sys.project.jobs")) == "sys.jobs"
+
+    def test_raises_when_no_table_is_readable(self):
+        with pytest.raises(RuntimeError, match="None of the Dremio job history tables"):
+            get_jobs_table(self.engine_failing_on(*DREMIO_JOBS_TABLES))
+
+
+class TestTestConnection:
+    def test_every_step_of_the_definition_has_a_function(self):
+        definition = json.loads(TEST_CONNECTION_DEFINITION.read_text())
+        expected_steps = {step["name"] for step in definition["steps"]}
+
+        connection = DremioConnection(software_config())
+        connection._client = MagicMock()
+
+        with patch(
+            "metadata.ingestion.source.database.dremio.connection.test_connection_steps"
+        ) as run_steps, patch("metadata.ingestion.source.database.dremio.connection.kill_active_connections"):
+            connection.test_connection(metadata=MagicMock())
+
+        assert set(run_steps.call_args.kwargs["test_fn"]) == expected_steps
+        assert run_steps.call_args.kwargs["service_type"] == "Dremio"
+
+    def test_job_history_is_not_a_mandatory_step(self):
+        definition = json.loads(TEST_CONNECTION_DEFINITION.read_text())
+        steps = {step["name"]: step for step in definition["steps"]}
+
+        assert steps["GetQueries"]["mandatory"] is False
+        assert all(steps[name]["mandatory"] for name in ("CheckAccess", "GetDatabases", "GetSchemas", "GetTables"))
+
+
+class TestServiceSpec:
+    def test_spec_registers_the_connection_class(self):
+        assert ServiceSpec.connection_class.endswith("dremio.connection.DremioConnection")
+
+    def test_source_reuses_the_base_test_connection(self):
+        assert DremioSource.test_connection is DatabaseServiceSource.test_connection
+        assert "test_connection" not in DremioSource.__dict__

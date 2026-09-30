@@ -3,7 +3,6 @@
 # Imported unchanged as the starting point of the Dremio connector; see the
 # following commits for the adaptations made to it.
 
-import textwrap
 import traceback
 from typing import Optional, Iterable, Dict, Tuple, List
 
@@ -20,6 +19,12 @@ from metadata.ingestion.api.steps import InvalidSourceException
 from metadata.ingestion.ometa.ometa_api import OpenMetadata
 from metadata.ingestion.source.database.common_db_source import CommonDbSourceService, TableNameAndType
 from metadata.ingestion.source.database.multi_db_source import MultiDBSource
+from metadata.ingestion.source.database.dremio.queries import (
+    DREMIO_GET_DATABASES,
+    DREMIO_GET_SCHEMAS,
+    DREMIO_GET_TABLES,
+    DREMIO_GET_VIEWS,
+)
 from metadata.utils import fqn
 from metadata.utils.filters import filter_by_database
 from metadata.utils.logger import ingestion_logger
@@ -30,43 +35,6 @@ from sqlalchemy.sql.sqltypes import STRINGTYPE
 from sqlalchemy_dremio import flight
 
 logger = ingestion_logger()
-
-DREMIO_GET_DATABASES = textwrap.dedent(
-    """
-SELECT SCHEMA_NAME
-FROM INFORMATION_SCHEMA.SCHEMATA
-WHERE SCHEMA_NAME NOT LIKE '%.%' 
-  AND NOT STARTS_WITH(SCHEMA_NAME, '@') 
-  AND NOT STARTS_WITH(SCHEMA_NAME, '$')
-    """
-)
-
-DREMIO_GET_SCHEMAS = textwrap.dedent(
-    """
-SELECT SCHEMA_NAME
-FROM INFORMATION_SCHEMA.SCHEMATA
-WHERE SCHEMA_NAME LIKE '{database_name}.%' 
-    """
-)
-
-
-DREMIO_GET_TABLES = textwrap.dedent(
-    """
-SELECT TABLE_NAME 
-FROM INFORMATION_SCHEMA.\"TABLES\"
-WHERE TABLE_SCHEMA  = '{schema_name}' 
-AND TABLE_TYPE = 'TABLE'
-    """
-)
-
-DREMIO_GET_VIEWS = textwrap.dedent(
-    """
-SELECT TABLE_NAME 
-FROM INFORMATION_SCHEMA.\"TABLES\"
-WHERE TABLE_SCHEMA  = '{schema_name}' 
-AND TABLE_TYPE = 'VIEW'
-    """
-)
 
 # SqlAlchemy < 2.0 doesn't have a DOUBLE type, but using Float here would be misleading and can be dangerous for the openmetadata users
 class DOUBLE(types.Float):
@@ -101,11 +69,8 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
             config: WorkflowSource,
             metadata: OpenMetadata,
     ):
-        self.test_connection = lambda: None
         super().__init__(config, metadata)
         self.database = None
-        self.test_connection = self._test_connection
-        self.test_connection()
 
     @classmethod
     def create(cls, config_dict: dict, metadata: OpenMetadata,
@@ -247,11 +212,4 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
 
     # TODO implement
     def yield_view_lineage(self) -> Iterable[Either[AddLineageRequest]]:
-        pass
-
-    # TODO implement
-    def _test_connection(self) -> None:
-        # see https://docs.open-metadata.org/v1.4.x/sdk/python/build-connector/source
-        #   test_connection is used (by OpenMetadata supported connectors ONLY) to validate permissions and connectivity
-        #   before moving forward with the ingestion.
         pass
