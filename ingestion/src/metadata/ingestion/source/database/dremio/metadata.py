@@ -5,21 +5,18 @@
 
 import textwrap
 import traceback
-from copy import deepcopy
-from typing import Optional, Iterable, Dict, Any, Tuple, List
+from typing import Optional, Iterable, Dict, Tuple, List
 
 from metadata.generated.schema.api.lineage.addLineage import AddLineageRequest
 from metadata.generated.schema.entity.data.database import Database
 from metadata.generated.schema.entity.data.table import Column, TableConstraint, TableType
-from metadata.generated.schema.entity.services.connections.database.customDatabaseConnection import \
-    CustomDatabaseConnection
+from metadata.generated.schema.entity.services.connections.database.dremioConnection import \
+    DremioConnection as DremioConnectionConfig
 from metadata.generated.schema.metadataIngestion.workflow import (
     Source as WorkflowSource,
 )
 from metadata.ingestion.api.models import Either
 from metadata.ingestion.api.steps import InvalidSourceException
-from metadata.ingestion.connections.builders import create_generic_db_connection
-from metadata.ingestion.connections.secrets import connection_with_options_secrets
 from metadata.ingestion.ometa.ometa_api import OpenMetadata
 from metadata.ingestion.source.database.common_db_source import CommonDbSourceService, TableNameAndType
 from metadata.ingestion.source.database.multi_db_source import MultiDBSource
@@ -27,7 +24,7 @@ from metadata.utils import fqn
 from metadata.utils.filters import filter_by_database
 from metadata.utils.logger import ingestion_logger
 from sqlalchemy import types
-from sqlalchemy.engine import Engine, Inspector
+from sqlalchemy.engine import Inspector
 from sqlalchemy.sql.sqltypes import STRINGTYPE
 
 from sqlalchemy_dremio import flight
@@ -85,12 +82,6 @@ flight._type_map.update({
 })
 
 
-class InvalidDremioConnectorException(Exception):
-    """
-    Connection argument is missing
-    """
-
-
 class DremioSource(CommonDbSourceService, MultiDBSource):
     """
     Dremio has following design:
@@ -120,10 +111,10 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
     def create(cls, config_dict: dict, metadata: OpenMetadata,
                pipeline_name: Optional[str] = None) -> "DremioSource":
         config: WorkflowSource = WorkflowSource.model_validate(config_dict)
-        connection: CustomDatabaseConnection = config.serviceConnection.root.config
-        if not isinstance(connection, CustomDatabaseConnection):
+        connection: DremioConnectionConfig = config.serviceConnection.root.config
+        if not isinstance(connection, DremioConnectionConfig):
             raise InvalidSourceException(
-                f"Expected CustomDatabaseConnection, but got {connection}"
+                f"Expected DremioConnection, but got {connection}"
             )
         return cls(config, metadata)
 
@@ -132,7 +123,7 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
     # ### extend MultiDBSource ###
     # ############################
     def get_configured_database(self) -> Optional[str]:
-        return None
+        return self.service_connection.database
 
     def get_database_names_raw(self) -> Iterable[str]:
         yield from self._execute_database_query(DREMIO_GET_DATABASES)
@@ -248,17 +239,11 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
         ]
 
     def set_inspector(self, database_name: str) -> None:
-        # Mainly a copy of the parent class with the small change
-        # of storing the database in the current connector instance,
-        # since "database" parameter does not exist for CustomDatabaseConnection
-        logger.info(f"Ingesting from database: {database_name}")
-
-        new_service_connection = deepcopy(self.service_connection)
-        self.engine = get_connection(new_service_connection)
+        # The parent rebuilds the engine for the new database. We also keep the
+        # database name, since Dremio expects it as the first part of the
+        # schema path (see the class docstring).
+        super().set_inspector(database_name)
         self.database = database_name
-
-        self._connection_map = {}  # Lazy init as well
-        self._inspector_map = {}
 
     # TODO implement
     def yield_view_lineage(self) -> Iterable[Either[AddLineageRequest]]:
@@ -270,56 +255,3 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
         #   test_connection is used (by OpenMetadata supported connectors ONLY) to validate permissions and connectivity
         #   before moving forward with the ingestion.
         pass
-
-
-def get_connection_url(connection: CustomDatabaseConnection) -> str:
-    def _get_option_or_else(option_name: str, *, default: Any = None, expected: bool = False):
-        value = connection.connectionOptions.root.get(option_name)
-        if not value:
-            if expected:
-                raise InvalidDremioConnectorException(f"Missing connection option: {option_name}")
-            else:
-                value = default
-        return value
-
-    scheme_value = "dremio+flight"
-    username = _get_option_or_else("username", expected=True)
-    # TODO password is in clear text and can be read by anyone in the ui
-    password = _get_option_or_else("password", expected=True)
-    host_port = _get_option_or_else("hostPort", expected=True)
-
-    use_encryption = _get_option_or_else("UseEncryption", default=False, expected=False)
-    disable_certificate_verification = _get_option_or_else("disableCertificateVerification", default=True,
-                                                           expected=False)
-
-    not_handled_options = (
-            set(connection.connectionOptions.root.keys()) -
-            {"username", "password", "hostPort", "UseEncryption", "disableCertificateVerification"}
-    )
-
-    additional_options = "&".join(
-        [f'UseEncryption={use_encryption}', f'disableCertificateVerification={disable_certificate_verification}'] +
-        [f'{k}={_get_option_or_else(k)}' for k in not_handled_options]
-    )
-
-    url = f"{scheme_value}://"
-    url += f"{username}:{password}"
-    url += f"@"
-    url += f"{host_port}"
-    url += f"/?"
-    url += f"{additional_options}"
-
-    return url
-
-
-@connection_with_options_secrets
-def get_connection_args(connection: CustomDatabaseConnection) -> Dict[str, Any]:
-    return {}
-
-
-def get_connection(connection: CustomDatabaseConnection) -> Engine:
-    return create_generic_db_connection(
-        connection=connection,
-        get_connection_url_fn=get_connection_url,
-        get_connection_args_fn=get_connection_args,
-    )
