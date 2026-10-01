@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pyarrow.lib import ArrowInvalid
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import Engine, make_url
 
 from metadata.generated.schema.entity.services.connections.database.dremioConnection import (
     DremioConnection as DremioConnectionConfig,
@@ -173,3 +173,23 @@ class TestServiceSpec:
     def test_source_reuses_the_base_test_connection(self):
         assert DremioSource.test_connection is DatabaseServiceSource.test_connection
         assert "test_connection" not in DremioSource.__dict__
+
+
+class TestEngine:
+    def test_the_engine_is_built_from_the_connection_without_connecting(self):
+        connection = DremioConnection(software_config("http://dremio.internal:9047"))
+
+        engine = connection.client
+
+        assert engine.url.host == "dremio.internal"
+        assert engine.url.port == 32010
+        assert engine.dialect.name == "dremio"
+        connection.close()
+
+    def test_the_engine_is_released_when_the_connection_is_closed(self):
+        with patch.object(Engine, "dispose") as dispose:
+            connection = DremioConnection(software_config())
+            connection.client  # noqa: B018 - builds the engine
+            connection.close()
+
+        dispose.assert_called_once()
