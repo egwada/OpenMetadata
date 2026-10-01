@@ -23,8 +23,8 @@ from metadata.ingestion.api.steps import InvalidSourceException
 from metadata.ingestion.lineage.models import Dialect
 from metadata.ingestion.lineage.parser import LineageParser
 from metadata.ingestion.source.database.dremio.lineage import DremioLineageSource
-from metadata.ingestion.source.database.dremio.queries import DREMIO_SQL_STATEMENT
 from metadata.ingestion.source.database.dremio.metadata import DremioSource
+from metadata.ingestion.source.database.dremio.queries import DREMIO_SQL_STATEMENT
 from metadata.ingestion.source.database.dremio.service_spec import ServiceSpec
 from metadata.ingestion.source.database.lineage_source import LineageSource
 
@@ -71,7 +71,9 @@ class TestViewDefinition:
         assert definition == 'CREATE VIEW "my""view" AS SELECT 1'
 
     def test_a_missing_definition_stays_missing(self):
-        definition = dremio_source().get_schema_definition(TableType.View, "totals", "folder", inspector_returning(None))
+        definition = dremio_source().get_schema_definition(
+            TableType.View, "totals", "folder", inspector_returning(None)
+        )
 
         assert definition is None
 

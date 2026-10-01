@@ -16,7 +16,6 @@ Dremio base for the Usage and Lineage workflows
 from abc import ABC
 from datetime import datetime
 from functools import cached_property
-from typing import Optional
 
 from metadata.generated.schema.entity.services.connections.database.dremioConnection import (
     DremioConnection as DremioConnectionConfig,
@@ -39,7 +38,7 @@ class DremioQueryParserSource(QueryParserSource, ABC):
     """
 
     @classmethod
-    def create(cls, config_dict: dict, metadata: OpenMetadata, pipeline_name: Optional[str] = None):
+    def create(cls, config_dict: dict, metadata: OpenMetadata, pipeline_name: str | None = None):
         """Create class instance"""
         config: WorkflowSource = WorkflowSource.model_validate(config_dict)
         connection: DremioConnectionConfig = config.serviceConnection.root.config

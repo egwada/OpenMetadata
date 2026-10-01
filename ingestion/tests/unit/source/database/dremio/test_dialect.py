@@ -182,7 +182,7 @@ class TestReflection:
         definition = self.dialect.get_view_definition(connection, "v", "space.folder")
 
         assert definition == "SELECT 1"
-        assert "INFORMATION_SCHEMA.\"VIEWS\"" in executed_sql(connection)
+        assert 'INFORMATION_SCHEMA."VIEWS"' in executed_sql(connection)
         assert "TABLE_SCHEMA = 'space.folder'" in executed_sql(connection)
         assert "TABLE_NAME = 'v'" in executed_sql(connection)
 
@@ -265,7 +265,9 @@ class TestNestedTypes:
         assert to_om_type(data_type) == "struct<data_path:varchar,data_size_bytes:bigint,data_format:varchar>"
 
     def test_dremio_names_are_translated(self):
-        assert to_om_type("ROW(a CHARACTER VARYING, b INTEGER, c BINARY VARYING)") == "struct<a:varchar,b:int,c:varbinary>"
+        assert (
+            to_om_type("ROW(a CHARACTER VARYING, b INTEGER, c BINARY VARYING)") == "struct<a:varchar,b:int,c:varbinary>"
+        )
 
     def test_rows_nest(self):
         assert to_om_type("ROW(a VARCHAR, b ROW(c INTEGER, d ARRAY(VARCHAR)))") == (
@@ -294,7 +296,10 @@ class TestNestedColumns:
     def test_a_row_column_is_a_complex_column(self):
         connection = connection_answering(
             COLUMNS=[("t", "file", "ROW", "YES", None, None), ("t", "id", "BIGINT", "YES", None, None)],
-            DESCRIBE=[("file", "ROW(path VARCHAR, size BIGINT)", "YES", None, None), ("id", "BIGINT", "YES", None, None)],
+            DESCRIBE=[
+                ("file", "ROW(path VARCHAR, size BIGINT)", "YES", None, None),
+                ("id", "BIGINT", "YES", None, None),
+            ],
         )
 
         columns = DremioFlightDialect().get_columns(connection, "t", "s")

@@ -35,8 +35,7 @@ from metadata.ingestion.source.database.dremio.queries import DREMIO_JOBS_TABLES
 from metadata.ingestion.source.database.dremio.service_spec import ServiceSpec
 
 TEST_CONNECTION_DEFINITION = (
-    Path(__file__).parents[6]
-    / "openmetadata-service/src/main/resources/json/data/testConnections/database/dremio.json"
+    Path(__file__).parents[6] / "openmetadata-service/src/main/resources/json/data/testConnections/database/dremio.json"
 )
 
 
@@ -150,9 +149,10 @@ class TestTestConnection:
         connection = DremioConnection(software_config())
         connection._client = MagicMock()
 
-        with patch(
-            "metadata.ingestion.source.database.dremio.connection.test_connection_steps"
-        ) as run_steps, patch("metadata.ingestion.source.database.dremio.connection.kill_active_connections"):
+        with (
+            patch("metadata.ingestion.source.database.dremio.connection.test_connection_steps") as run_steps,
+            patch("metadata.ingestion.source.database.dremio.connection.kill_active_connections"),
+        ):
             connection.test_connection(metadata=MagicMock())
 
         assert set(run_steps.call_args.kwargs["test_fn"]) == expected_steps
