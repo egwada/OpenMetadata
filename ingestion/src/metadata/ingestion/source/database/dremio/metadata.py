@@ -121,7 +121,8 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
 
     def get_raw_database_schema_names(self) -> Iterable[str]:
         if self.database is not None:
-            schemas = self._execute_database_query(DREMIO_GET_SCHEMAS.format(database_name=self.database))
+            schemas = self._execute_database_query(
+                DREMIO_GET_SCHEMAS.format(database_name=self._escape_literal(self.database)))
         else:
             schemas = self.inspector.get_schema_names()
 
@@ -131,20 +132,24 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
             yield cleaned_schema_name
 
     def _remove_database_from_schema_name(self, schema_name: str) -> str:
-        if self.database is not None:
-            if not schema_name.startswith(self.database) or schema_name is None or schema_name == self.database:
-                return schema_name
-
-            schema_name = schema_name[len(self.database) + 1:]
+        """
+        `<database>.<folder>` is the schema `<folder>`. The objects at the root of the
+        database are in a schema that has the name of the database.
+        """
+        if self.database is not None and schema_name.startswith(self.database + "."):
+            return schema_name[len(self.database) + 1:]
         return schema_name
 
     def _add_database_to_schema_name(self, schema_name: str) -> str:
         if self.database is not None:
-            if schema_name is None or schema_name.strip() == "":
-                schema_name = self.database
-            else:
-                schema_name = self.database + "." + schema_name
+            if schema_name is None or schema_name.strip() == "" or schema_name == self.database:
+                return self.database
+            return self.database + "." + schema_name
         return schema_name
+
+    @staticmethod
+    def _escape_literal(value: str) -> str:
+        return value.replace("'", "''")
 
     def get_columns_and_constraints(  # pylint: disable=too-many-locals
             self,
@@ -185,7 +190,7 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
         # Instead of using this implementation we created our own query to return only TABLES and in the method query_view_names_and_types only VIEWS
         return [
             TableNameAndType(name=table_name)
-            for table_name in self._execute_database_query(DREMIO_GET_TABLES.format(schema_name=self._add_database_to_schema_name(schema_name))) or []
+            for table_name in self._execute_database_query(DREMIO_GET_TABLES.format(schema_name=self._escape_literal(self._add_database_to_schema_name(schema_name)))) or []
         ]
 
     def query_view_names_and_types(
@@ -193,7 +198,7 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
     ) -> Iterable[TableNameAndType]:
         return [
             TableNameAndType(name=table_name, type_=TableType.View)
-            for table_name in self._execute_database_query(DREMIO_GET_VIEWS.format(schema_name=self._add_database_to_schema_name(schema_name))) or []
+            for table_name in self._execute_database_query(DREMIO_GET_VIEWS.format(schema_name=self._escape_literal(self._add_database_to_schema_name(schema_name)))) or []
         ]
 
     def set_inspector(self, database_name: str) -> None:
