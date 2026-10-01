@@ -50,6 +50,7 @@ def _(element, compiler, **kw):
 @compiles(LenFn, Dialects.Hana)
 @compiles(LenFn, Dialects.Druid)
 @compiles(LenFn, Dialects.Doris)
+@compiles(LenFn, Dialects.Dremio)
 @compiles(LenFn, Dialects.StarRocks)
 @compiles(LenFn, Dialects.Teradata)
 @compiles(LenFn, Dialects.Informix)

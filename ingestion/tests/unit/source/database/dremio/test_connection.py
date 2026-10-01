@@ -241,6 +241,7 @@ class TestEngine:
 
         assert engine.url.host == "dremio.internal"
         assert engine.url.port == 32010
+        assert engine.dialect.name == "dremio"
         connection.close()
 
     def test_the_engine_is_released_when_the_connection_is_closed(self):
