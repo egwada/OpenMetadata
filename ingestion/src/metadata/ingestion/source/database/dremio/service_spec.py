@@ -7,10 +7,12 @@
 from metadata.ingestion.source.database.dremio.connection import DremioConnection
 from metadata.ingestion.source.database.dremio.lineage import DremioLineageSource
 from metadata.ingestion.source.database.dremio.metadata import DremioSource
+from metadata.ingestion.source.database.dremio.usage import DremioUsageSource
 from metadata.utils.service_spec.default import DefaultDatabaseSpec
 
 ServiceSpec = DefaultDatabaseSpec(
     metadata_source_class=DremioSource,
     lineage_source_class=DremioLineageSource,
+    usage_source_class=DremioUsageSource,
     connection_class=DremioConnection,
 )
