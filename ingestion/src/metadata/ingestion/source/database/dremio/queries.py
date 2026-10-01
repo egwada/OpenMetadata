@@ -23,11 +23,18 @@ WHERE SCHEMA_NAME NOT LIKE '%.%'
     """
 )
 
+# The folders of a namespace, and the namespace itself when objects sit at its
+# root, which is where Dremio puts them in a space that has no folder.
+# STARTS_WITH, because `_` is a wildcard of LIKE and namespaces have underscores.
 DREMIO_GET_SCHEMAS = textwrap.dedent(
     """
 SELECT SCHEMA_NAME
 FROM INFORMATION_SCHEMA.SCHEMATA
-WHERE SCHEMA_NAME LIKE '{database_name}.%' 
+WHERE STARTS_WITH(SCHEMA_NAME, '{database_name}.')
+UNION
+SELECT DISTINCT TABLE_SCHEMA
+FROM INFORMATION_SCHEMA."TABLES"
+WHERE TABLE_SCHEMA = '{database_name}'
     """
 )
 
