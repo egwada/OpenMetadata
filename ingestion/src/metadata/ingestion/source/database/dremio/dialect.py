@@ -45,6 +45,15 @@ GET_TABLE_EXISTS = (
 # loads the schema on demand, so it is what the columns are read from.
 DESCRIBE_TABLE = "DESCRIBE {path}"
 
+# One query for all the tables of a schema, for those that Dremio has already
+# loaded. The others are described one by one.
+GET_SCHEMA_COLUMNS = """
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, NUMERIC_PRECISION, NUMERIC_SCALE
+FROM INFORMATION_SCHEMA."COLUMNS"
+WHERE TABLE_SCHEMA = {schema}
+ORDER BY TABLE_NAME, ORDINAL_POSITION
+"""
+
 GET_VIEW_DEFINITION = (
     'SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA."VIEWS" WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {view}'
 )
@@ -94,6 +103,72 @@ def quote_path(schema: Optional[str], table: str) -> str:
     return ".".join('"' + part.replace('"', '""') + '"' for part in parts)
 
 
+NESTED_TYPES = ("ROW", "STRUCT", "ARRAY", "LIST", "MAP")
+
+# Names of Dremio types that OpenMetadata knows under another one
+OM_TYPE_NAMES = {
+    "CHARACTER VARYING": "varchar",
+    "BINARY VARYING": "varbinary",
+    "INTEGER": "int",
+    "DOUBLE PRECISION": "double",
+}
+
+
+def is_nested(data_type: Optional[str]) -> bool:
+    """Whether the type has fields or elements, e.g. `ROW(a VARCHAR, b INTEGER)`"""
+    return (data_type or "").strip().upper().startswith(NESTED_TYPES)
+
+
+def split_top_level(text: str) -> List[str]:
+    """Split on the commas that are not inside parentheses"""
+    parts, depth, current = [], 0, ""
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
+def to_om_type(data_type: str) -> str:
+    """
+    Write a Dremio type the way the column parser of OpenMetadata reads it:
+    `ROW(a VARCHAR, b ROW(c INTEGER))` becomes `struct<a:varchar,b:struct<c:int>>`
+    """
+    data_type = data_type.strip()
+    upper = data_type.upper()
+
+    if upper.startswith(("ROW(", "STRUCT(")):
+        fields = []
+        for field in split_top_level(data_type[data_type.index("(") + 1 : -1]):
+            if field.startswith('"'):
+                name, _, field_type = field[1:].partition('"')
+            else:
+                name, _, field_type = field.partition(" ")
+            fields.append(f"{name}:{to_om_type(field_type)}")
+        return f"struct<{','.join(fields)}>"
+    if upper.startswith(("ARRAY(", "LIST(")):
+        return f"array<{to_om_type(data_type[data_type.index('(') + 1 : -1])}>"
+    if upper.startswith("MAP("):
+        key, value = split_top_level(data_type[4:-1])
+        return f"map<{to_om_type(key)},{to_om_type(value)}>"
+
+    base = upper.split("(")[0].strip()
+    return OM_TYPE_NAMES.get(base, base.lower())
+
+
+def as_number(value: Optional[float]) -> Optional[float]:
+    """Dremio reports a missing precision or scale as NaN"""
+    return None if value is None or value != value else value
+
+
 def get_column_type(
     data_type: str,
     length: Optional[int],
@@ -102,6 +177,7 @@ def get_column_type(
 ) -> types.TypeEngine:
     """Translate a Dremio data type into a SQLAlchemy type"""
     data_type = (data_type or "").upper()
+    precision, scale = as_number(precision), as_number(scale)
 
     if data_type in ("CHARACTER VARYING", "CHARACTER", "VARCHAR"):
         return types.VARCHAR(length) if length else types.VARCHAR()
@@ -139,6 +215,10 @@ class DremioFlightDialect(DremioDialect_flight):
 
     statement_compiler = DremioStatementCompiler
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._columns_by_schema: Dict[str, Dict[str, List[tuple]]] = {}
+
     def get_schema_names(self, connection: Connection, schema: Optional[str] = None, **kw) -> List[str]:
         return [row[0] for row in connection.exec_driver_sql(GET_SCHEMA_NAMES)]
 
@@ -163,19 +243,38 @@ class DremioFlightDialect(DremioDialect_flight):
         schema: Optional[str] = None,
         **kw,
     ) -> List[Dict[str, Any]]:
-        query = DESCRIBE_TABLE.format(path=quote_path(schema, table_name))
-        return [
-            {
+        rows = self._get_schema_columns(connection, schema or "").get(table_name)
+        # INFORMATION_SCHEMA gives a bare ROW, without its fields
+        if rows is None or any(is_nested(row[1]) for row in rows):
+            query = DESCRIBE_TABLE.format(path=quote_path(schema, table_name))
+            rows = [tuple(row[:5]) for row in connection.exec_driver_sql(query)]
+
+        columns = []
+        for name, data_type, is_nullable, precision, scale in rows:
+            column = {
                 "name": name,
                 "type": get_column_type(data_type, None, precision, scale),
                 "nullable": is_nullable != "NO",
                 "default": None,
                 "comment": None,
             }
-            for name, data_type, is_nullable, precision, scale in (
-                row[:5] for row in connection.exec_driver_sql(query)
-            )
-        ]
+            if is_nested(data_type):
+                column.update({"system_data_type": to_om_type(data_type), "is_complex": True})
+            columns.append(column)
+        return columns
+
+    def _get_schema_columns(self, connection: Connection, schema: str) -> Dict[str, List[tuple]]:
+        """
+        The columns of the tables of a schema that INFORMATION_SCHEMA knows,
+        by table, as (name, type, nullable, precision, scale)
+        """
+        if schema not in self._columns_by_schema:
+            by_table: Dict[str, List[tuple]] = {}
+            query = GET_SCHEMA_COLUMNS.format(schema=literal(schema))
+            for table, name, data_type, is_nullable, precision, scale in connection.exec_driver_sql(query):
+                by_table.setdefault(table, []).append((name, data_type, is_nullable, precision, scale))
+            self._columns_by_schema[schema] = by_table
+        return self._columns_by_schema[schema]
 
     def get_view_definition(
         self,
