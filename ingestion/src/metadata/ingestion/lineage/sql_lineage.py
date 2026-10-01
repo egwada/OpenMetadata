@@ -608,14 +608,24 @@ def get_column_lineage(
     """
     column_lineage = []
     if column_lineage_map.get(to_table_raw_name) and column_lineage_map.get(to_table_raw_name).get(from_table_raw_name):
-        # Select all
-        if "*" in column_lineage_map.get(to_table_raw_name).get(from_table_raw_name)[0]:
+        # Select all: `SELECT *` links each column to the one of the same name. Only that
+        # pair is a wildcard. A pair such as (nb, *), from `COUNT(*) AS nb`, is not a
+        # `SELECT *`, and has no source column to link.
+        if any(pair == ("*", "*") for pair in column_lineage_map[to_table_raw_name][from_table_raw_name]):
             column_lineage_map[to_table_raw_name][from_table_raw_name] = [
-                (c.name.root, c.name.root) for c in from_entity.columns
+                pair
+                for to_col, from_col in column_lineage_map[to_table_raw_name][from_table_raw_name]
+                for pair in (
+                    [(c.name.root, c.name.root) for c in from_entity.columns]
+                    if (to_col, from_col) == ("*", "*")
+                    else [(to_col, from_col)]
+                )
             ]
 
         # Other cases
         for to_col, from_col in column_lineage_map.get(to_table_raw_name).get(from_table_raw_name):
+            if from_col == "*":
+                continue
             to_col_fqn = get_column_fqn(to_entity, to_col)
             from_col_fqn = get_column_fqn(from_entity, from_col)
             if to_col_fqn and from_col_fqn:

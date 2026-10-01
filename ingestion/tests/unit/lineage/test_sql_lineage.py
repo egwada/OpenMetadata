@@ -104,6 +104,75 @@ class SqlLineageTest(TestCase):
         # Then
         assert len(col_lineage) == 1
 
+    @staticmethod
+    def _table(name, columns):
+        return Table(
+            id=uuid.uuid4(),
+            name=name,
+            fullyQualifiedName=f"testdb.public.{name}",
+            columns=[
+                {"name": c, "dataType": "NUMBER", "fullyQualifiedName": f"testdb.public.{name}.{c}"} for c in columns
+            ],
+        )
+
+    def test_get_column_lineage_count_star_is_not_select_all(self):
+        """
+        `COUNT(*) AS nb` is the pair (nb, *). It must not turn the whole view into a `SELECT *`,
+        which dropped the other columns, here `total`
+        """
+        to_entity = self._table("target", ["nb", "region", "total"])
+        from_entity = self._table("sales", ["region", "amount"])
+        column_lineage_map = {
+            "testdb.public.target": {"testdb.public.sales": [("nb", "*"), ("region", "region"), ("total", "amount")]}
+        }
+
+        col_lineage = get_column_lineage(
+            to_entity=to_entity,
+            to_table_raw_name="testdb.public.target",
+            from_entity=from_entity,
+            from_table_raw_name="testdb.public.sales",
+            column_lineage_map=column_lineage_map,
+        )
+
+        assert {(str(c.fromColumns[0].root), str(c.toColumn.root)) for c in col_lineage} == {
+            ("testdb.public.sales.region", "testdb.public.target.region"),
+            ("testdb.public.sales.amount", "testdb.public.target.total"),
+        }
+
+    def test_get_column_lineage_select_all_next_to_other_columns(self):
+        """`SELECT *, amount * 2 AS double_amount`"""
+        to_entity = self._table("target", ["region", "amount", "double_amount"])
+        from_entity = self._table("sales", ["region", "amount"])
+        column_lineage_map = {
+            "testdb.public.target": {"testdb.public.sales": [("*", "*"), ("double_amount", "amount")]}
+        }
+
+        col_lineage = get_column_lineage(
+            to_entity=to_entity,
+            to_table_raw_name="testdb.public.target",
+            from_entity=from_entity,
+            from_table_raw_name="testdb.public.sales",
+            column_lineage_map=column_lineage_map,
+        )
+
+        assert {(str(c.fromColumns[0].root), str(c.toColumn.root)) for c in col_lineage} == {
+            ("testdb.public.sales.region", "testdb.public.target.region"),
+            ("testdb.public.sales.amount", "testdb.public.target.amount"),
+            ("testdb.public.sales.amount", "testdb.public.target.double_amount"),
+        }
+
+    def test_count_star_view_keeps_its_column_lineage(self):
+        """From the SQL of a view to the pairs the parser gives"""
+        query = """CREATE VIEW target AS
+        SELECT region, SUM(amount) AS total, COUNT(*) AS nb FROM testdb.public.sales GROUP BY region
+        """
+        lineage_map = populate_column_lineage_map(LineageParser(query).column_lineage)
+
+        pairs = next(iter(next(iter(lineage_map.values())).values()))
+
+        assert ("total", "amount") in pairs
+        assert ("region", "region") in pairs
+
     def test_populate_column_lineage_map_select_all(self):
         """
         Method to test column lineage map populate func
