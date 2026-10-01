@@ -14,7 +14,6 @@ Source connection handler
 """
 
 from functools import partial
-from typing import Optional
 from urllib.parse import urlparse
 
 from sqlalchemy import text
@@ -90,8 +89,8 @@ class DremioConnection(BaseConnection[DremioConnectionConfig, Engine]):
     def test_connection(
         self,
         metadata: OpenMetadata,
-        automation_workflow: Optional[AutomationWorkflow] = None,
-        timeout_seconds: Optional[int] = THREE_MIN,
+        automation_workflow: AutomationWorkflow | None = None,
+        timeout_seconds: int | None = THREE_MIN,
     ) -> TestConnectionResult:
         """
         Test connection. This can be executed either as part
@@ -134,12 +133,13 @@ def get_jobs_table(engine: Engine) -> str:
         for jobs_table in DREMIO_JOBS_TABLES:
             try:
                 connection.execute(text(DREMIO_TEST_GET_JOBS.format(jobs_table=jobs_table))).fetchone()
-                return jobs_table
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # sqlalchemy-dremio lets the raw pyarrow error through (e.g.
                 # ArrowInvalid: Object 'project' not found within 'sys'), so any
                 # failure means this candidate is not usable.
                 logger.debug(f"Dremio job history is not readable from [{jobs_table}]: {exc}")
+            else:
+                return jobs_table
 
     raise RuntimeError(f"None of the Dremio job history tables can be read: {', '.join(DREMIO_JOBS_TABLES)}")
 

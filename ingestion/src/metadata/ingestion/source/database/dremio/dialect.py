@@ -22,7 +22,8 @@ text, escaped, and statements go through `exec_driver_sql` so that SQLAlchemy
 does not read a `:` in a name as a bind parameter.
 """
 
-from typing import Any, Dict, List, Optional
+import math
+from typing import Any
 
 from sqlalchemy import types
 from sqlalchemy.dialects import registry
@@ -94,7 +95,7 @@ def literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def quote_path(schema: Optional[str], table: str) -> str:
+def quote_path(schema: str | None, table: str) -> str:
     """
     Write the path of a table, where `schema` is the dotted path of its space
     and folders (e.g. `space.folder`): every part is a quoted identifier.
@@ -114,12 +115,12 @@ OM_TYPE_NAMES = {
 }
 
 
-def is_nested(data_type: Optional[str]) -> bool:
+def is_nested(data_type: str | None) -> bool:
     """Whether the type has fields or elements, e.g. `ROW(a VARCHAR, b INTEGER)`"""
     return (data_type or "").strip().upper().startswith(NESTED_TYPES)
 
 
-def split_top_level(text: str) -> List[str]:
+def split_top_level(text: str) -> list[str]:
     """Split on the commas that are not inside parentheses"""
     parts, depth, current = [], 0, ""
     for char in text:
@@ -164,16 +165,16 @@ def to_om_type(data_type: str) -> str:
     return OM_TYPE_NAMES.get(base, base.lower())
 
 
-def as_number(value: Optional[float]) -> Optional[float]:
+def as_number(value: float | None) -> float | None:
     """Dremio reports a missing precision or scale as NaN"""
-    return None if value is None or value != value else value
+    return None if value is None or math.isnan(value) else value
 
 
 def get_column_type(
     data_type: str,
-    length: Optional[int],
-    precision: Optional[int],
-    scale: Optional[int],
+    length: int | None,
+    precision: int | None,
+    scale: int | None,
 ) -> types.TypeEngine:
     """Translate a Dremio data type into a SQLAlchemy type"""
     data_type = (data_type or "").upper()
@@ -217,12 +218,12 @@ class DremioFlightDialect(DremioDialect_flight):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._columns_by_schema: Dict[str, Dict[str, List[tuple]]] = {}
+        self._columns_by_schema: dict[str, dict[str, list[tuple]]] = {}
 
-    def get_schema_names(self, connection: Connection, schema: Optional[str] = None, **kw) -> List[str]:
+    def get_schema_names(self, connection: Connection, schema: str | None = None, **kw) -> list[str]:
         return [row[0] for row in connection.exec_driver_sql(GET_SCHEMA_NAMES)]
 
-    def get_table_names(self, connection: Connection, schema: Optional[str] = None, **kw) -> List[str]:
+    def get_table_names(self, connection: Connection, schema: str | None = None, **kw) -> list[str]:
         query = GET_TABLE_NAMES.format(schema=literal(schema or ""))
         return [row[0] for row in connection.exec_driver_sql(query)]
 
@@ -230,7 +231,7 @@ class DremioFlightDialect(DremioDialect_flight):
         self,
         connection: Connection,
         table_name: str,
-        schema: Optional[str] = None,
+        schema: str | None = None,
         **kw,
     ) -> bool:
         query = GET_TABLE_EXISTS.format(schema=literal(schema or ""), table=literal(table_name))
@@ -240,9 +241,9 @@ class DremioFlightDialect(DremioDialect_flight):
         self,
         connection: Connection,
         table_name: str,
-        schema: Optional[str] = None,
+        schema: str | None = None,
         **kw,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         rows = self._get_schema_columns(connection, schema or "").get(table_name)
         # INFORMATION_SCHEMA gives a bare ROW, without its fields
         if rows is None or any(is_nested(row[1]) for row in rows):
@@ -263,13 +264,13 @@ class DremioFlightDialect(DremioDialect_flight):
             columns.append(column)
         return columns
 
-    def _get_schema_columns(self, connection: Connection, schema: str) -> Dict[str, List[tuple]]:
+    def _get_schema_columns(self, connection: Connection, schema: str) -> dict[str, list[tuple]]:
         """
         The columns of the tables of a schema that INFORMATION_SCHEMA knows,
         by table, as (name, type, nullable, precision, scale)
         """
         if schema not in self._columns_by_schema:
-            by_table: Dict[str, List[tuple]] = {}
+            by_table: dict[str, list[tuple]] = {}
             query = GET_SCHEMA_COLUMNS.format(schema=literal(schema))
             for table, name, data_type, is_nullable, precision, scale in connection.exec_driver_sql(query):
                 by_table.setdefault(table, []).append((name, data_type, is_nullable, precision, scale))
@@ -280,9 +281,9 @@ class DremioFlightDialect(DremioDialect_flight):
         self,
         connection: Connection,
         view_name: str,
-        schema: Optional[str] = None,
+        schema: str | None = None,
         **kw,
-    ) -> Optional[str]:
+    ) -> str | None:
         query = GET_VIEW_DEFINITION.format(schema=literal(schema or ""), view=literal(view_name))
         return connection.exec_driver_sql(query).scalar()
 
