@@ -22,9 +22,13 @@ from sqlalchemy_dremio import query as driver_query
 
 from metadata.ingestion.source.database.dremio.dialect import (
     DremioFlightDialect,
+    as_number,
     get_column_type,
+    is_nested,
     literal,
     quote_path,
+    split_top_level,
+    to_om_type,
 )
 
 
@@ -34,6 +38,24 @@ def connection_returning(*rows) -> MagicMock:
     result.__iter__.side_effect = lambda: iter(rows)
     result.scalar.return_value = rows[0][0] if rows else None
     return connection
+
+
+def connection_answering(**answers) -> MagicMock:
+    """A connection that answers by what the statement contains, e.g. COLUMNS=[...]"""
+    connection = MagicMock()
+
+    def answer(statement):
+        for key, rows in answers.items():
+            if key in statement:
+                return iter(rows)
+        raise AssertionError(f"Unexpected statement: {statement}")
+
+    connection.exec_driver_sql.side_effect = answer
+    return connection
+
+
+def executed_statements(connection: MagicMock) -> list:
+    return [call.args[0] for call in connection.exec_driver_sql.call_args_list]
 
 
 def executed_sql(connection: MagicMock) -> str:
@@ -85,6 +107,12 @@ class TestColumnType:
 
         assert (column_type.precision, column_type.scale) == (38, 2)
 
+    def test_a_missing_precision_and_scale_are_nan(self):
+        nan = float("nan")
+
+        assert get_column_type("DECIMAL", None, nan, nan).precision is None
+        assert get_column_type("DECIMAL", None, 10.0, nan).scale == 0
+
     def test_decimal_without_scale(self):
         assert get_column_type("DECIMAL", None, 10.0, None).scale == 0
 
@@ -98,23 +126,55 @@ class TestColumnType:
 class TestReflection:
     dialect = DremioFlightDialect()
 
-    def test_columns_are_read_with_describe(self):
-        connection = connection_returning(
-            ("region", "CHARACTER VARYING", "YES", None, None),
-            ("amount", "DECIMAL", "NO", 12.0, 2.0),
+    def test_columns_of_a_schema_are_read_with_one_statement(self):
+        connection = connection_answering(
+            COLUMNS=[
+                ("sales", "region", "CHARACTER VARYING", "YES", None, None),
+                ("sales", "amount", "DECIMAL", "NO", 12.0, 2.0),
+                ("events", "id", "BIGINT", "YES", None, None),
+            ]
+        )
+        dialect = DremioFlightDialect()
+
+        sales_columns = dialect.get_columns(connection, "sales", "polaris.demo")
+        events_columns = dialect.get_columns(connection, "events", "polaris.demo")
+
+        assert len(executed_statements(connection)) == 1
+        assert "TABLE_SCHEMA = 'polaris.demo'" in executed_statements(connection)[0]
+        assert [(c["name"], c["nullable"]) for c in sales_columns] == [("region", True), ("amount", False)]
+        assert isinstance(sales_columns[0]["type"], types.VARCHAR)
+        assert (sales_columns[1]["type"].precision, sales_columns[1]["type"].scale) == (12, 2)
+        assert [c["name"] for c in events_columns] == ["id"]
+
+    def test_the_columns_of_a_schema_are_read_once_per_dialect(self):
+        connection = connection_answering(COLUMNS=[("a", "x", "BIGINT", "YES", None, None)])
+        dialect = DremioFlightDialect()
+
+        dialect.get_columns(connection, "a", "s")
+        dialect.get_columns(connection, "a", "s")
+        dialect.get_columns(connection, "a", "other")
+
+        assert len(executed_statements(connection)) == 2  # s once, other once
+
+    def test_a_table_dremio_has_not_loaded_is_described(self):
+        # The columns of a lakehouse table stay out of INFORMATION_SCHEMA until it has been read
+        connection = connection_answering(
+            COLUMNS=[("loaded", "id", "BIGINT", "YES", None, None)],
+            DESCRIBE=[("region", "CHARACTER VARYING", "YES", None, None), ("amount", "DOUBLE", "NO", 53.0, None)],
         )
 
-        columns = self.dialect.get_columns(connection, "sales", "polaris.demo")
+        columns = DremioFlightDialect().get_columns(connection, "lazy", "polaris.demo")
 
-        assert executed_sql(connection) == 'DESCRIBE "polaris"."demo"."sales"'
+        assert executed_statements(connection)[-1] == 'DESCRIBE "polaris"."demo"."lazy"'
         assert [(c["name"], c["nullable"]) for c in columns] == [("region", True), ("amount", False)]
-        assert isinstance(columns[0]["type"], types.VARCHAR)
-        assert (columns[1]["type"].precision, columns[1]["type"].scale) == (12, 2)
 
     def test_describe_extra_columns_are_ignored(self):
-        connection = connection_returning(("id", "BIGINT", "YES", None, None, "[]", None, None))
+        connection = connection_answering(
+            COLUMNS=[],
+            DESCRIBE=[("id", "BIGINT", "YES", None, None, "[]", None, None)],
+        )
 
-        assert self.dialect.get_columns(connection, "t", "s")[0]["name"] == "id"
+        assert DremioFlightDialect().get_columns(connection, "t", "s")[0]["name"] == "id"
 
     def test_view_definition_is_read_from_the_catalog(self):
         connection = connection_returning(("SELECT 1",))
@@ -170,3 +230,92 @@ class TestResultTypes:
     def test_types_known_to_the_driver_are_kept(self):
         assert driver_query._type_map["datetime64[ns]"] is types.DATETIME
         assert driver_query._type_map["object"] is types.VARCHAR
+
+
+class TestNumbers:
+    def test_nan_is_no_number(self):
+        assert as_number(float("nan")) is None
+
+    def test_none_and_numbers_are_kept(self):
+        assert as_number(None) is None
+        assert as_number(0.0) == 0.0
+        assert as_number(38.0) == 38.0
+
+
+class TestNestedTypes:
+    @pytest.mark.parametrize(
+        "data_type,expected",
+        [
+            ("ROW(a VARCHAR, b BIGINT)", True),
+            ("row(a VARCHAR)", True),
+            ("ARRAY(VARCHAR)", True),
+            ("MAP(VARCHAR, INTEGER)", True),
+            ("ROW", True),
+            ("CHARACTER VARYING", False),
+            ("DECIMAL", False),
+            (None, False),
+        ],
+    )
+    def test_nested_types_are_recognised(self, data_type, expected):
+        assert is_nested(data_type) is expected
+
+    def test_a_row_is_written_as_a_struct(self):
+        data_type = "ROW(data_path VARCHAR, data_size_bytes BIGINT, data_format VARCHAR)"
+
+        assert to_om_type(data_type) == "struct<data_path:varchar,data_size_bytes:bigint,data_format:varchar>"
+
+    def test_dremio_names_are_translated(self):
+        assert to_om_type("ROW(a CHARACTER VARYING, b INTEGER, c BINARY VARYING)") == "struct<a:varchar,b:int,c:varbinary>"
+
+    def test_rows_nest(self):
+        assert to_om_type("ROW(a VARCHAR, b ROW(c INTEGER, d ARRAY(VARCHAR)))") == (
+            "struct<a:varchar,b:struct<c:int,d:array<varchar>>>"
+        )
+
+    def test_a_decimal_loses_its_precision(self):
+        assert to_om_type("ROW(amount DECIMAL(38, 2), id BIGINT)") == "struct<amount:decimal,id:bigint>"
+
+    def test_a_quoted_field_name_may_hold_a_space(self):
+        assert to_om_type('ROW("first name" VARCHAR, age INTEGER)') == "struct<first name:varchar,age:int>"
+
+    def test_maps_and_arrays(self):
+        assert to_om_type("MAP(VARCHAR, ARRAY(INTEGER))") == "map<varchar,array<int>>"
+        assert to_om_type("LIST(VARCHAR)") == "array<varchar>"
+
+    def test_commas_inside_parentheses_do_not_split(self):
+        assert split_top_level("a DECIMAL(38, 2), b ROW(c INTEGER, d INTEGER), e VARCHAR") == [
+            "a DECIMAL(38, 2)",
+            "b ROW(c INTEGER, d INTEGER)",
+            "e VARCHAR",
+        ]
+
+
+class TestNestedColumns:
+    def test_a_row_column_is_a_complex_column(self):
+        connection = connection_answering(
+            COLUMNS=[("t", "file", "ROW", "YES", None, None), ("t", "id", "BIGINT", "YES", None, None)],
+            DESCRIBE=[("file", "ROW(path VARCHAR, size BIGINT)", "YES", None, None), ("id", "BIGINT", "YES", None, None)],
+        )
+
+        columns = DremioFlightDialect().get_columns(connection, "t", "s")
+
+        assert columns[0]["is_complex"] is True
+        assert columns[0]["system_data_type"] == "struct<path:varchar,size:bigint>"
+        assert "is_complex" not in columns[1]
+
+    def test_a_table_with_a_row_is_described_for_its_fields(self):
+        connection = connection_answering(
+            COLUMNS=[("t", "file", "ROW", "YES", None, None)],
+            DESCRIBE=[("file", "ROW(path VARCHAR)", "YES", None, None)],
+        )
+
+        DremioFlightDialect().get_columns(connection, "t", "s")
+
+        assert executed_statements(connection)[-1] == 'DESCRIBE "s"."t"'
+
+    def test_the_columns_of_a_table_without_nested_types_come_from_the_batch(self):
+        connection = connection_answering(COLUMNS=[("t", "id", "BIGINT", "YES", None, None)])
+
+        DremioFlightDialect().get_columns(connection, "t", "s")
+
+        assert len(executed_statements(connection)) == 1
