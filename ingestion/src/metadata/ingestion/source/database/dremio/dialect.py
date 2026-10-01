@@ -39,7 +39,7 @@ from sqlalchemy import types
 from sqlalchemy.dialects import registry
 from sqlalchemy.engine import Connection
 from sqlalchemy_dremio import query as driver_query
-from sqlalchemy_dremio.flight import DremioDialect_flight
+from sqlalchemy_dremio.flight import DremioCompiler, DremioDialect_flight
 
 DREMIO_DIALECT_NAME = "dremio.flight"
 
@@ -232,10 +232,27 @@ def get_column_type(
     return types.NullType()
 
 
+class DremioStatementCompiler(DremioCompiler):
+    """
+    The driver drops the parameters of a statement, so they are written in it
+    """
+
+    def visit_bindparam(self, bindparam, **kw):
+        kw["literal_binds"] = True
+        return super().visit_bindparam(bindparam, **kw)
+
+
 class DremioFlightDialect(DremioDialect_flight):
     """
     `dremio+flight` dialect whose reflection works with SQLAlchemy 2
     """
+
+    # The driver names its dialect "dremio+flight". The name is the one the
+    # profiler rules are registered for, see Dialects.Dremio.
+    name = "dremio"
+    driver = "flight"
+
+    statement_compiler = DremioStatementCompiler
 
     def create_connect_args(self, url):
         """The driver drops the parameters it does not know: the project id travels at the end of the connection string"""

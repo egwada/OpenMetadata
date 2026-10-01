@@ -194,6 +194,10 @@ def get_connection_url(connection: DremioConnectionConfig, ca_file: str | None =
 
     `ca_file` is the path of the CA certificate that a Dremio Software with TLS
     is checked against, see `get_tls_options`.
+
+    The `database` (the namespace, see DremioConnection) is the default schema of
+    the session. The profiler and the sampler write the tables as
+    `<folder>.<table>`, which Dremio resolves from that namespace.
     """
     auth = connection.authType
 
@@ -208,6 +212,7 @@ def get_connection_url(connection: DremioConnectionConfig, ca_file: str | None =
             password=auth.password.get_secret_value(),
             host=rest_url.hostname,
             port=SOFTWARE_FLIGHT_PORT,
+            database=connection.database,
             query={"UseEncryption": str(use_tls), **(get_tls_options(auth, ca_file) if use_tls else {})},
         )
 
@@ -216,6 +221,7 @@ def get_connection_url(connection: DremioConnectionConfig, ca_file: str | None =
             drivername=DREMIO_DIALECT,
             host=CLOUD_FLIGHT_HOSTS[auth.region],
             port=CLOUD_FLIGHT_PORT,
+            database=connection.database,
             query={
                 "UseEncryption": "True",
                 "Token": auth.personalAccessToken.get_secret_value(),

@@ -65,6 +65,7 @@ def _(element, compiler, **kw):
 @compiles(ModuloFn, Dialects.Teradata)
 @compiles(ModuloFn, Dialects.Exasol)
 @compiles(ModuloFn, Dialects.Databricks)
+@compiles(ModuloFn, Dialects.Dremio)
 def _(element, compiler, **kw):
     """Modulo function for specific dialect"""
     value, base = validate_and_compile(element, compiler, **kw)
