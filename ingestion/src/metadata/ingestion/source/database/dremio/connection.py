@@ -137,7 +137,7 @@ def get_jobs_table(engine: Engine) -> str:
                 # sqlalchemy-dremio lets the raw pyarrow error through (e.g.
                 # ArrowInvalid: Object 'project' not found within 'sys'), so any
                 # failure means this candidate is not usable.
-                logger.debug(f"Dremio job history is not readable from [{jobs_table}]: {exc}")
+                logger.debug("Dremio job history is not readable from [%s]: %s", jobs_table, exc)
             else:
                 return jobs_table
 
