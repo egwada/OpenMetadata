@@ -8,7 +8,6 @@ from collections.abc import Iterable
 
 from sqlalchemy.engine import Inspector
 
-from metadata.generated.schema.api.lineage.addLineage import AddLineageRequest
 from metadata.generated.schema.entity.data.database import Database
 from metadata.generated.schema.entity.data.table import Column, TableConstraint, TableType
 from metadata.generated.schema.entity.services.connections.database.dremioConnection import (
@@ -17,7 +16,6 @@ from metadata.generated.schema.entity.services.connections.database.dremioConnec
 from metadata.generated.schema.metadataIngestion.workflow import (
     Source as WorkflowSource,
 )
-from metadata.ingestion.api.models import Either
 from metadata.ingestion.api.steps import InvalidSourceException
 from metadata.ingestion.ometa.ometa_api import OpenMetadata
 from metadata.ingestion.source.database.common_db_source import CommonDbSourceService, TableNameAndType
@@ -106,10 +104,10 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
                     logger.error(traceback.format_exc())
                     logger.warning(f"Error trying to process database {new_database}: {exc}")
 
-    # TODO implement
     @staticmethod
     def get_table_description(schema_name: str, table_name: str, inspector: Inspector) -> str:
-        # inspector.get_table_comment(..) not available in sql-alchemy dremio dialect
+        # Dremio has no table comment to read through SQL: the description of a dataset is its wiki,
+        # which is only available from the REST API.
         return ""
 
     def get_raw_database_schema_names(self) -> Iterable[str]:
@@ -207,7 +205,3 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
         # schema path (see the class docstring).
         super().set_inspector(database_name)
         self.database = database_name
-
-    # TODO implement
-    def yield_view_lineage(self) -> Iterable[Either[AddLineageRequest]]:
-        pass
