@@ -19,6 +19,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from metadata.generated.schema.entity.data.table import TableType
+from metadata.generated.schema.entity.services.connections.database.dremioConnection import (
+    DremioConnection as DremioConnectionConfig,
+)
 from metadata.ingestion.api.steps import InvalidSourceException
 from metadata.ingestion.lineage.models import Dialect
 from metadata.ingestion.lineage.parser import LineageParser
@@ -139,6 +142,20 @@ class TestLineageSource:
 
         assert "FROM sys.jobs_recent" in statement
         assert "create%%table%%as" in statement
+
+    def test_create_builds_a_source_from_a_dremio_connection(self):
+        config = MagicMock()
+        config.serviceConnection.root.config = DremioConnectionConfig.model_validate(
+            {"authType": {"hostPort": "http://dremio:9047", "username": "u", "password": "p"}}
+        )
+
+        with (
+            patch("metadata.ingestion.source.database.dremio.query_parser.WorkflowSource") as workflow_source,
+            patch.object(DremioLineageSource, "__init__", return_value=None),
+        ):
+            workflow_source.model_validate.return_value = config
+
+            assert isinstance(DremioLineageSource.create({}, MagicMock()), DremioLineageSource)
 
     def test_create_rejects_another_connection(self):
         with patch("metadata.ingestion.source.database.dremio.query_parser.WorkflowSource") as workflow_source:
