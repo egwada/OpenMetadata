@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import types
 from sqlalchemy.dialects import registry
+from sqlalchemy_dremio import query as driver_query
 
 from metadata.ingestion.source.database.dremio.dialect import (
     DremioFlightDialect,
@@ -218,6 +219,17 @@ class TestReflection:
 
 def test_dialect_replaces_the_one_of_the_driver():
     assert registry.load("dremio.flight") is DremioFlightDialect
+
+
+class TestResultTypes:
+    @pytest.mark.parametrize("pandas_type", ["datetime64[s]", "datetime64[ms]", "datetime64[us]", "datetime64[ns]"])
+    def test_timestamps_of_any_precision_are_known_to_the_driver(self, pandas_type):
+        # Dremio timestamps are in milliseconds, which pandas 2 keeps as datetime64[ms]
+        assert pandas_type in driver_query._type_map
+
+    def test_types_known_to_the_driver_are_kept(self):
+        assert driver_query._type_map["datetime64[ns]"] is types.DATETIME
+        assert driver_query._type_map["object"] is types.VARCHAR
 
 
 class TestNumbers:

@@ -28,6 +28,7 @@ from typing import Any
 from sqlalchemy import types
 from sqlalchemy.dialects import registry
 from sqlalchemy.engine import Connection
+from sqlalchemy_dremio import query as driver_query
 from sqlalchemy_dremio.flight import DremioDialect_flight
 
 DREMIO_DIALECT_NAME = "dremio.flight"
@@ -72,6 +73,21 @@ SIMPLE_TYPES = {
     "TIMESTAMP": types.TIMESTAMP,
     "BINARY VARYING": types.VARBINARY,
 }
+
+
+# The driver converts the columns of a result by the name of their pandas type,
+# and only knows datetime64[ns]. Dremio timestamps have a precision of a
+# millisecond, which pandas 2 keeps as datetime64[ms].
+RESULT_TYPES = {
+    "datetime64[s]": types.DATETIME,
+    "datetime64[ms]": types.DATETIME,
+    "datetime64[us]": types.DATETIME,
+    "int8": types.SMALLINT,
+    "int16": types.SMALLINT,
+}
+
+for pandas_type, sql_type in RESULT_TYPES.items():
+    driver_query._type_map.setdefault(pandas_type, sql_type)
 
 
 def literal(value: str) -> str:
