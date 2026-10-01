@@ -102,7 +102,7 @@ class DremioSource(CommonDbSourceService, MultiDBSource):
                     yield new_database
                 except Exception as exc:
                     logger.error(traceback.format_exc())
-                    logger.warning(f"Error trying to process database {new_database}: {exc}")
+                    logger.warning("Error trying to process database %s: %s", new_database, exc)
 
     @staticmethod
     def get_table_description(schema_name: str, table_name: str, inspector: Inspector) -> str:
