@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from metadata.ingestion.source.database.dremio.metadata import DremioSource
-from metadata.ingestion.source.database.dremio.queries import DREMIO_GET_SCHEMAS
+from metadata.ingestion.source.database.dremio.queries import DREMIO_GET_DATABASES, DREMIO_GET_SCHEMAS
 
 
 def dremio_source(database="polaris") -> DremioSource:
@@ -84,6 +84,16 @@ class TestSchemas:
         list(source.get_raw_database_schema_names())
 
         assert "TABLE_SCHEMA = 'o''brien'" in source._execute_database_query.call_args.args[0]
+
+
+class TestDatabaseQuery:
+    def test_the_system_catalogs_are_not_databases(self):
+        assert "UPPER(SCHEMA_NAME) NOT IN ('INFORMATION_SCHEMA', 'SYS')" in DREMIO_GET_DATABASES
+
+    def test_folders_and_internal_spaces_are_still_left_out(self):
+        assert "NOT LIKE '%.%'" in DREMIO_GET_DATABASES
+        assert "STARTS_WITH(SCHEMA_NAME, '@')" in DREMIO_GET_DATABASES
+        assert "STARTS_WITH(SCHEMA_NAME, '$')" in DREMIO_GET_DATABASES
 
 
 class TestTableQueries:

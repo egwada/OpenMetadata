@@ -23,6 +23,7 @@ from metadata.ingestion.source.database.dremio.connection import get_connection_
 from metadata.ingestion.source.database.dremio.dialect import DremioFlightDialect
 from metadata.profiler.orm.functions.length import LenFn
 from metadata.profiler.orm.functions.modulo import ModuloFn
+from metadata.profiler.orm.functions.random_num import RandomNumFn
 from metadata.profiler.orm.registry import Dialects
 
 dialect = DremioFlightDialect()
@@ -105,3 +106,28 @@ class TestSessionSchema:
         auth = {"hostPort": "http://dremio:9047", "username": "u", "password": "p"}
 
         assert get_connection_url(DremioConnectionConfig.model_validate({"authType": auth})).database is None
+
+
+class TestSampling:
+    """
+    The statements the sampler builds for the sample data and for a percentage
+    profile (see SQASampler.get_sample_query and fetch_sample_data), as Dremio gets them
+    """
+
+    def test_the_random_number_is_a_function_dremio_has(self):
+        statement = compiled(select(ModuloFn(RandomNumFn(), 100).label("random")))
+
+        assert "MOD(ABS(RANDOM()) * 100, 100)" in statement
+        assert "%" not in statement
+
+    def test_a_percentage_sample_filters_on_the_random_number(self):
+        rnd = select(sales, ModuloFn(RandomNumFn(), 100).label("random")).cte("sales_rnd")
+        statement = compiled(select(rnd).where(rnd.c.random <= 20))
+
+        assert "random <= 20" in statement
+        assert "?" not in statement
+
+    def test_the_sample_data_is_limited_in_the_statement(self):
+        sample = select(sales.c.id, sales.c.region).limit(10)
+
+        assert compiled(sample).endswith("LIMIT 10")

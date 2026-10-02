@@ -13,6 +13,8 @@ OpenMetadata, and the remainder of the path is its schema.
 
 import textwrap
 
+# `INFORMATION_SCHEMA` and `sys` are Dremio's own catalogs, present in every
+# project: they hold no user data and are not ingested as databases.
 DREMIO_GET_DATABASES = textwrap.dedent(
     """
 SELECT SCHEMA_NAME
@@ -20,6 +22,7 @@ FROM INFORMATION_SCHEMA.SCHEMATA
 WHERE SCHEMA_NAME NOT LIKE '%.%'
   AND NOT STARTS_WITH(SCHEMA_NAME, '@')
   AND NOT STARTS_WITH(SCHEMA_NAME, '$')
+  AND UPPER(SCHEMA_NAME) NOT IN ('INFORMATION_SCHEMA', 'SYS')
     """
 )
 
