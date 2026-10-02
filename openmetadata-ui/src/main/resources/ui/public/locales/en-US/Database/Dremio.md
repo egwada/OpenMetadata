@@ -34,6 +34,21 @@ Dremio Software only. Password of the user.
 $$
 
 $$section
+### Verify SSL $(id="verifySSL")
+
+Dremio Software only, when Host and Port is an `https` URL. How the certificate of the Dremio server is checked:
+- `no-ssl` (default): against the trusted authorities of the system.
+- `ignore`: not checked. Use it for a self-signed certificate. The connection is encrypted but the server is not authenticated: prefer `validate` where you can.
+- `validate`: against the CA certificate of the SSL Config.
+$$
+
+$$section
+### SSL Config $(id="sslConfig")
+
+Dremio Software only. The CA certificate that signed the certificate of the Dremio server (PEM), used when Verify SSL is `validate`.
+$$
+
+$$section
 ### Region $(id="region")
 
 Dremio Cloud only. Region of your organization: `US` or `EU`. It selects the Arrow Flight endpoint of the region.
